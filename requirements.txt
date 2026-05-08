@@ -1,0 +1,16 @@
+# ReSpeaker Lite — Voice Pipeline
+# Python 3.10 recommended
+#
+# IMPORTANT: Install in this exact order to avoid version conflicts
+#
+# Step 1 — downgrade numpy first (openwakeword requires numpy < 2)
+numpy<2
+#
+# Step 2 — pinned onnxruntime (1.23+ breaks openWakeWord with segfault)
+onnxruntime==1.16.3
+#
+# Step 3 — remaining packages
+pyaudio
+sounddevice
+faster-whisper
+openwakeword
