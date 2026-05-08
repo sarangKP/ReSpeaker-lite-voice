@@ -9,8 +9,7 @@ CHUNK      = 1280    # frames per read — 80ms, required by openWakeWord
 
 # ── STT model ──────────────────────────────────────────────
 # Options: "tiny", "base", "small", "medium", "large-v2"
-# Recommended: "tiny" for Pi 5, "base" for laptop/cloud
-MODEL_SIZE   = "tiny"
+MODEL_SIZE   = "base"
 DEVICE_TYPE  = "cpu"    # "cpu" or "cuda" (if GPU available)
 COMPUTE_TYPE = "int8"   # "int8" fastest on CPU, "float16" for GPU
 

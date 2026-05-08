@@ -145,10 +145,17 @@ class Pipeline:
     # ── DEVICE DETECTION ──────────────────────────────────
     @staticmethod
     def find_device(pa):
+        candidates = []
         for i in range(pa.get_device_count()):
             d = pa.get_device_info_by_index(i)
             if ('ReSpeaker' in d['name'] or 'Lite' in d['name']) and d['maxInputChannels'] >= 2:
+                candidates.append((i, d))
+        # Prefer the USB device (2-channel, 16kHz) over the I2S interface (8-channel)
+        for i, d in candidates:
+            if 'USB' in d['name'] and d['maxInputChannels'] == 2:
                 return i, d['name']
+        if candidates:
+            return candidates[0][0], candidates[0][1]['name']
         return None, None
 
     # ── AUDIO HELPERS ─────────────────────────────────────
@@ -394,7 +401,12 @@ class Pipeline:
     def run(self):
         try:
             while True:
-                raw    = self._stream.read(config.CHUNK, exception_on_overflow=False)
+                try:
+                    raw = self._stream.read(config.CHUNK, exception_on_overflow=False)
+                except OSError as e:
+                    print(f"\n  [audio] read error: {e} — retrying in 1s")
+                    time.sleep(1)
+                    continue
                 stereo = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2)
                 ch0    = stereo[:, 0].copy()
                 ch1    = stereo[:, 1].copy()

@@ -131,12 +131,14 @@ def main():
 
     pipeline.start()
 
-    threading.Thread(target=ui_loop, args=(pipeline,), daemon=True).start()
+    threading.Thread(target=pipeline.run, daemon=True).start()
 
     try:
-        pipeline.run()
+        ui_loop(pipeline)   # main thread — finally block here restores the terminal
     except KeyboardInterrupt:
-        print('\n\n  Stopped.')
+        pass
+    finally:
+        pipeline.stop()
 
 
 if __name__ == '__main__':
