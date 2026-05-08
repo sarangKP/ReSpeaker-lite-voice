@@ -18,7 +18,7 @@ COMPUTE_TYPE = "int8"   # "int8" fastest on CPU, "float16" for GPU
 # Built-in options: "alexa", "hey_jarvis", "hey_mycroft", "hey_rhasspy"
 # "alexa" confirmed working — others may need accent tuning
 # For a custom word (e.g. "Elara"), train via openWakeWord training script
-WAKE_WORD        = "alexa"
+WAKE_WORD        = "alexa_v0.1"
 WAKE_THRESHOLD   = 0.5    # 0.0–1.0 — lower = more sensitive, more false positives
 WAKE_COOLDOWN_S  = 2.0    # seconds to ignore after a detection fires
 

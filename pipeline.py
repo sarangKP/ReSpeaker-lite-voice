@@ -1,19 +1,13 @@
 # ─── pipeline.py ──────────────────────────────────────────
 # The audio engine. Handles device detection, audio routing,
 # wake word detection, VAD segmentation, and STT transcription.
-#
-# Zero knowledge of UI or transport — all output goes through callbacks:
-#   on_transcript(text: str)
-#   on_state_change(state: int)   — State.WAITING / LISTENING / THINKING
-#   on_wake()
-#   on_level(db: float)           — called every chunk for level metering
 
 import pyaudio
 import numpy as np
 import queue
 import threading
 import time
-import sys
+import os
 
 from faster_whisper import WhisperModel
 from openwakeword.model import Model as WakeWordModel
@@ -26,6 +20,69 @@ class State:
     WAITING   = 0
     LISTENING = 1
     THINKING  = 2
+
+
+# ─── HELPERS ──────────────────────────────────────────────
+def _get_oww_model_path(name: str) -> str:
+    """
+    Resolve a wake word name to its .onnx file path.
+    Accepts a bare name ("alexa"), versioned name ("alexa_v0.1"), or an
+    absolute file path. Searches the openwakeword bundled dir first, then
+    auto-downloads from GitHub if not found (handles openwakeword 0.6+
+    which no longer bundles models).
+    """
+    if os.path.isfile(name):
+        return name
+
+    base_name = name.split('_v')[0]  # "alexa_v0.1" → "alexa"
+
+    try:
+        import openwakeword as _oww
+        import openwakeword.utils
+        models_dir = os.path.join(os.path.dirname(_oww.__file__), 'resources', 'models')
+
+        def _search():
+            if not os.path.isdir(models_dir):
+                return None
+            for fname in os.listdir(models_dir):
+                if fname.lower().startswith(base_name.lower()) and fname.endswith('.onnx'):
+                    return os.path.join(models_dir, fname)
+            return None
+
+        path = _search()
+        if path:
+            print(f"  Wake word model: {os.path.basename(path)}")
+            return path
+
+        if os.path.isdir(models_dir):
+            bundled = sorted(
+                f[:-5] for f in os.listdir(models_dir)
+                if f.endswith('.onnx') and not f.startswith(('embedding', 'melspec', 'silero'))
+            )
+            if bundled:
+                print(f"  Bundled wake words: {bundled}")
+
+        print(f"  Downloading wake word model '{base_name}' (first-run, one-time)...")
+        openwakeword.utils.download_models([base_name])
+        path = _search()
+        if path:
+            print(f"  Wake word model: {os.path.basename(path)}")
+            return path
+
+    except FileNotFoundError:
+        raise
+    except Exception as e:
+        raise FileNotFoundError(
+            f"Could not load wake word model '{name}': {e}\n"
+            f"Try manually: python3 -c \"import openwakeword; "
+            f"openwakeword.utils.download_models(['{base_name}'])\""
+        ) from e
+
+    raise FileNotFoundError(
+        f"Wake word model '{name}' not found.\n"
+        f"Built-in options: alexa, hey_jarvis, hey_mycroft, hey_marvin\n"
+        f"Custom model: set WAKE_WORD to an absolute .onnx file path in config.py"
+    )
 
 
 # ─── PIPELINE CLASS ───────────────────────────────────────
@@ -41,27 +98,22 @@ class Pipeline:
         self.on_wake         = on_wake         or (lambda: None)
         self.on_level        = on_level        or (lambda db: None)
 
-        # internal state
         self._state      = State.WAITING
         self._state_lock = threading.Lock()
         self._wake_event = threading.Event()
         self._seg_event  = threading.Event()
 
-        # timing
         self._last_activity = 0.0
 
-        # queues
         self._audio_q  = queue.Queue(maxsize=50)
         self._ch0_q    = queue.Queue(maxsize=200)
         self._ww_q     = queue.Queue(maxsize=25)
         self._level_q  = queue.Queue(maxsize=8)
         self._seg_q    = queue.Queue()
 
-        # pyaudio
         self._pa     = None
         self._stream = None
 
-        # models (loaded in start())
         self._stt_model = None
         self._oww_model = None
 
@@ -77,7 +129,6 @@ class Pipeline:
     # ── DEVICE DETECTION ──────────────────────────────────
     @staticmethod
     def find_device(pa):
-        """Find ReSpeaker Lite device index. Returns (index, name) or (None, None)."""
         for i in range(pa.get_device_count()):
             d = pa.get_device_info_by_index(i)
             if ('ReSpeaker' in d['name'] or 'Lite' in d['name']) and d['maxInputChannels'] >= 2:
@@ -102,14 +153,12 @@ class Pipeline:
 
     # ── THREADS ───────────────────────────────────────────
     def _dispatcher(self):
-        """Fan-out: routes CH0 and CH1 to the right queues."""
         while True:
             try:
                 ch0, ch1 = self._audio_q.get(timeout=0.5)
             except queue.Empty:
                 continue
 
-            # level meter — always
             try:
                 self._level_q.put_nowait(ch0)
             except queue.Full:
@@ -118,7 +167,6 @@ class Pipeline:
             state = self._get_state()
 
             if state == State.WAITING:
-                # CH1 → wake word engine (bounded, drop oldest if full)
                 try:
                     self._ww_q.put_nowait(ch1)
                 except queue.Full:
@@ -129,7 +177,6 @@ class Pipeline:
                         pass
 
             elif state == State.LISTENING:
-                # CH0 → segmenter
                 try:
                     self._ch0_q.put_nowait(ch0)
                 except queue.Full:
@@ -159,13 +206,15 @@ class Pipeline:
                 continue
 
             pred  = self._oww_model.predict(chunk)
-            score = float(pred.get(config.WAKE_WORD, 0.0))
+            score = max(
+                (float(v) for k, v in pred.items() if config.WAKE_WORD.split('_v')[0] in k),
+                default=0.0
+            )
 
             if score > config.WAKE_THRESHOLD:
                 last_detection      = now
                 self._last_activity = now
 
-                # flush stale CH0 audio
                 while not self._ch0_q.empty():
                     try:
                         self._ch0_q.get_nowait()
@@ -196,13 +245,12 @@ class Pipeline:
                 if self._get_state() == State.WAITING:
                     break
 
-                # timeout handling
                 if not speaking and (time.time() - listen_start) > config.LISTEN_TIMEOUT_S:
                     if (self._last_activity > 0 and
                             (time.time() - self._last_activity) > config.INACTIVITY_TIMEOUT):
                         self._set_state(State.WAITING)
                     else:
-                        listen_start = time.time()   # reset — still in active window
+                        listen_start = time.time()
                     break
 
                 try:
@@ -211,10 +259,10 @@ class Pipeline:
                     continue
 
                 if self.is_speech(chunk):
-                    speaking = True
+                    speaking      = True
                     silence_count = 0
                     buffer.append(chunk)
-                    listen_start = time.time()
+                    listen_start  = time.time()
                 else:
                     if speaking:
                         silence_count += 1
@@ -261,20 +309,17 @@ class Pipeline:
                 self._last_activity = time.time()
                 self.on_transcript(text)
 
-            # flush stale audio from during transcription
             while not self._ch0_q.empty():
                 try:
                     self._ch0_q.get_nowait()
                 except queue.Empty:
                     break
 
-            # stay active for next command
             self._set_state(State.LISTENING)
             self._wake_event.set()
 
     # ── PUBLIC API ────────────────────────────────────────
     def start(self, device_index=None):
-        """Load models, open audio stream, start all threads."""
         self._pa = pyaudio.PyAudio()
 
         if device_index is None:
@@ -293,36 +338,47 @@ class Pipeline:
         print("  STT model loaded.")
 
         print(f'  Loading wake word model "{config.WAKE_WORD}"...')
+
+        # ── FIX: resolve name → .onnx file path for openWakeWord 0.4.0 ──
+        model_path = _get_oww_model_path(config.WAKE_WORD)
         self._oww_model = WakeWordModel(
-            wakeword_models=[config.WAKE_WORD],
-            inference_framework='onnx'
+            wakeword_model_paths=[model_path]
         )
         print("  Wake word model loaded.")
 
-        # open single stereo stream
-        self._stream = self._pa.open(
-            rate=config.RATE,
-            channels=config.CHANNELS,
-            format=pyaudio.paInt16,
-            input=True,
-            input_device_index=device_index,
-            frames_per_buffer=config.CHUNK
-        )
+        # ── FIX: ReSpeaker USB firmware outputs 48kHz but we need 16kHz for
+        #    openWakeWord and Whisper. PyAudio will handle the read at RATE=16000
+        #    only if the device supports it. If it fails, we need resampling.
+        #    Try 16kHz first, fall back gracefully.
+        try:
+            self._stream = self._pa.open(
+                rate=config.RATE,
+                channels=config.CHANNELS,
+                format=pyaudio.paInt16,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=config.CHUNK
+            )
+        except OSError as e:
+            self._pa.terminate()
+            raise RuntimeError(
+                f"Could not open audio stream at {config.RATE}Hz: {e}\n"
+                f"The ReSpeaker USB firmware runs at 48000Hz.\n"
+                f"Try setting RATE=48000 in config.py, or install: pip install soxr"
+            )
 
-        # start worker threads
-        for target, args in [
-            (self._dispatcher,       ()),
-            (self._level_thread,     ()),
-            (self._wake_word_thread, ()),
-            (self._segmenter,        ()),
-            (self._transcriber,      ()),
+        for target in [
+            self._dispatcher,
+            self._level_thread,
+            self._wake_word_thread,
+            self._segmenter,
+            self._transcriber,
         ]:
-            threading.Thread(target=target, args=args, daemon=True).start()
+            threading.Thread(target=target, daemon=True).start()
 
         print("  Pipeline started.\n")
 
     def run(self):
-        """Block and feed audio into the pipeline. Call after start()."""
         try:
             while True:
                 raw    = self._stream.read(config.CHUNK, exception_on_overflow=False)
@@ -337,7 +393,6 @@ class Pipeline:
             self.stop()
 
     def stop(self):
-        """Clean up stream and PyAudio."""
         if self._stream:
             self._stream.stop_stream()
             self._stream.close()

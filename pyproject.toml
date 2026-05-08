@@ -1,0 +1,20 @@
+[project]
+name = "respeaker-lite-voice"
+version = "0.1.0"
+description = "Wake word + STT pipeline for ReSpeaker Lite (XMOS XU316)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy<2",          # numpy 2.x breaks onnxruntime at import time
+    "onnxruntime",
+    "pyaudio",
+    "faster-whisper",
+    "openwakeword==0.4.0",  # 0.6+ dropped bundled models; 0.4.0 includes alexa, hey_jarvis, etc.
+    "websockets",
+]
+
+[tool.uv]
+# tflite-runtime has no wheel for Python 3.12+; we use the ONNX backend anyway
+override-dependencies = [
+    "tflite-runtime; python_version < '3.12'",
+]

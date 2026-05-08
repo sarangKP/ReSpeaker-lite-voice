@@ -45,29 +45,34 @@ arecord -l
 
 ## Installation
 
+**Requires:** [uv](https://docs.astral.sh/uv/getting-started/installation/) installed on the system.
+
 ```bash
-# 1. System dependency for pyaudio
-sudo apt install portaudio19-dev
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 2. Create virtual environment
-python3 -m venv .venv && source .venv/bin/activate
+# Clone the repo
+git clone https://github.com/your-user/respeaker-lite-voice
+cd respeaker-lite-voice
 
-# 3. Install in order — do NOT do pip install -r requirements.txt in one shot
-pip install "numpy<2"
-pip install onnxruntime==1.16.3
-pip install pyaudio faster-whisper openwakeword websockets
+# One-shot setup — installs portaudio + syncs Python deps
+./setup.sh
 ```
 
-> See requirements.txt for the pinned versions and the reason each is needed.
+`setup.sh` handles:
+- System dependency (`portaudio19-dev`) for pyaudio on Debian/Ubuntu/Pi OS, Arch, and macOS
+- `uv sync` — creates `.venv` and installs all Python packages
 
 ---
 
 ## Usage
 
+Plug in the ReSpeaker Lite via USB, then:
+
 ### Local (Pi or laptop with mic attached)
 
 ```bash
-python3 local.py
+uv run python local.py
 ```
 
 Say **"Alexa"** to activate, then speak. The session stays active for 60 seconds of inactivity before requiring the wake word again.
@@ -75,7 +80,7 @@ Say **"Alexa"** to activate, then speak. The session stays active for 60 seconds
 ### WebSocket server (cloud / remote)
 
 ```bash
-python3 server.py
+uv run python server.py
 ```
 
 Connects on `ws://0.0.0.0:8765` by default. Change `WS_HOST` and `WS_PORT` in `config.py`.
@@ -86,7 +91,7 @@ Connects on `ws://0.0.0.0:8765` by default. Change `WS_HOST` and `WS_PORT` in `c
 Client → Server  binary  raw audio bytes — S16_LE 16kHz mono
 Server → Client  JSON    {"type": "transcript", "text": "...", "ts": "HH:MM:SS"}
                          {"type": "state",      "state": "waiting|listening|thinking"}
-                         {"type": "wake",       "word": "alexa"}
+                         {"type": "wake",       "word": "alexa_v0.1"}
                          {"type": "level",      "db": -32.5}
                          {"type": "ready"}
                          {"type": "error",      "message": "..."}
@@ -101,7 +106,7 @@ All settings live in `config.py` — nothing else needs editing.
 | Setting | Default | Description |
 |---|---|---|
 | `MODEL_SIZE` | `"tiny"` | Whisper model size — `tiny` for Pi 5, `base` for cloud |
-| `WAKE_WORD` | `"alexa"` | Wake word — must match a downloaded model name |
+| `WAKE_WORD` | `"alexa_v0.1"` | Wake word — must match a bundled model name |
 | `WAKE_THRESHOLD` | `0.5` | Detection sensitivity 0–1 |
 | `SILENCE_THRESHOLD` | `0.025` | RMS threshold for voice activity |
 | `INACTIVITY_TIMEOUT` | `60.0` | Seconds before session resets and wake word required again |
@@ -114,14 +119,16 @@ All settings live in `config.py` — nothing else needs editing.
 
 ## Available Wake Words
 
-| Model name | Say |
-|---|---|
-| `alexa` | "Alexa" ✅ confirmed working |
-| `hey_jarvis` | "Hey Jarvis" |
-| `hey_mycroft` | "Hey Mycroft" |
-| `hey_rhasspy` | "Hey Rhasspy" |
+These are bundled with `openwakeword` — no download needed:
 
-For a custom wake word (e.g. "Elara"), train with the [openWakeWord training script](https://github.com/dscripka/openWakeWord#training-new-models).
+| `WAKE_WORD` value | Say |
+|---|---|
+| `alexa_v0.1` | "Alexa" ✅ confirmed working |
+| `hey_jarvis_v0.1` | "Hey Jarvis" |
+| `hey_mycroft_v0.1` | "Hey Mycroft" |
+| `hey_marvin_v0.1` | "Hey Marvin" |
+
+For a custom wake word, set `WAKE_WORD` to an absolute `.onnx` file path, or train with the [openWakeWord training script](https://github.com/dscripka/openWakeWord#training-new-models).
 
 ---
 
@@ -230,18 +237,15 @@ The USB firmware runs at **16000 Hz**. Requesting 48000 Hz with `hw:` writes a b
 
 ---
 
-### 5. openWakeWord version requirements
+### 5. numpy must be < 2.0
 
-| Package | Required | Problem if wrong |
-|---|---|---|
-| `numpy` | `< 2.0` | onnxruntime segfaults on import |
-| `onnxruntime` | `== 1.16.3` | 1.17+ causes frozen scores (`0.001703`) or segfault |
+`numpy 2.x` causes `onnxruntime` to segfault or fail at import. `pyproject.toml` pins `numpy<2` so `uv sync` handles this automatically.
 
 ---
 
 ### 6. openWakeWord needs mono int16 — not stereo float32
 
-The model returns near-zero scores (`0.00005` max) if fed stereo or float32 audio. It must receive **mono int16** directly from pyaudio. This is handled automatically in `pipeline.py`.
+The model returns near-zero scores if fed stereo or float32 audio. It must receive **mono int16** directly from pyaudio. This is handled automatically in `pipeline.py`.
 
 ---
 

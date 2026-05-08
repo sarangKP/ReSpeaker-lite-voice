@@ -1,17 +1,12 @@
-# ReSpeaker Lite — Voice Pipeline
-# Python 3.10 recommended
+# Superseded by pyproject.toml — use: uv sync
+# Kept as a pip fallback. Install in this order to avoid numpy/onnxruntime conflict:
 #
-# ⚠️  Install in this exact order — version pinning is required
-#
-# Step 1 — numpy must be < 2 before onnxruntime is installed
+#   pip install "numpy<2"
+#   pip install onnxruntime pyaudio faster-whisper openwakeword websockets
+
 numpy<2
-#
-# Step 2 — onnxruntime 1.17+ causes frozen scores or segfault with openWakeWord
-onnxruntime==1.16.3
-#
-# Step 3 — remaining packages (order does not matter)
+onnxruntime
 pyaudio
-sounddevice
 faster-whisper
-openwakeword
+openwakeword>=0.4
 websockets
