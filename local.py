@@ -9,6 +9,7 @@ import sys
 import os
 import time
 import threading
+os.environ['ALSA_CARD'] = 'Lite' 
 
 import config
 from pipeline import Pipeline, State
@@ -61,9 +62,12 @@ def ui_loop(pipeline):
         State.THINKING:  '\033[93m◎ transcribing...\033[0m            ',
     }
 
-    os.system('clear')
+    # hide cursor, enable alternate screen buffer (clean static UI)
+    sys.stdout.write('\033[?1049h\033[?25l')
+    sys.stdout.flush()
 
-    while True:
+    try:
+      while True:
         with _ui_lock:
             db0      = _current_db
             current  = _current_state
@@ -82,7 +86,8 @@ def ui_loop(pipeline):
         else:
             session_str = '\033[92m● active\033[0m                          '
 
-        sys.stdout.write('\033[H')
+        # move to top-left and clear entire screen on every frame
+        sys.stdout.write('\033[H\033[2J')
         print('\033[1m  ReSpeaker Lite — Wake Word + STT\033[0m')
         print(f'  Wake: "{config.WAKE_WORD}"  →  STT: faster-whisper {config.MODEL_SIZE} · {config.COMPUTE_TYPE}')
         print('  ' + '─' * 62)
@@ -109,6 +114,10 @@ def ui_loop(pipeline):
         print('  \033[90mCtrl+C to stop\033[0m')
         sys.stdout.flush()
         time.sleep(0.05)
+    finally:
+      # restore terminal — show cursor, exit alternate buffer
+      sys.stdout.write('\033[?25h\033[?1049l')
+      sys.stdout.flush()
 
 
 # ─── MAIN ─────────────────────────────────────────────────
