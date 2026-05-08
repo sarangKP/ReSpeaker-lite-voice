@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # One-shot setup for ReSpeaker Lite voice pipeline.
 # Run this once on a new machine, then use: uv run python local.py
+#
+# Requires Python 3.12 (not 3.13+). uv reads .python-version and
+# auto-downloads 3.12 if needed — no manual install required.
 set -euo pipefail
 
 echo "==> Installing system dependency: portaudio (required by pyaudio)"

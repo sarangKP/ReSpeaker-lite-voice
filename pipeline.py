@@ -2,15 +2,31 @@
 # The audio engine. Handles device detection, audio routing,
 # wake word detection, VAD segmentation, and STT transcription.
 
-import pyaudio
+import os
+import contextlib
+
+# Suppress C-level stderr noise (onnxruntime GPU probe, ALSA JACK errors)
+@contextlib.contextmanager
+def _quiet_stderr():
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved   = os.dup(2)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+    try:
+        yield
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+
 import numpy as np
 import queue
 import threading
 import time
-import os
 
-from faster_whisper import WhisperModel
-from openwakeword.model import Model as WakeWordModel
+with _quiet_stderr():
+    import pyaudio
+    from faster_whisper import WhisperModel
+    from openwakeword.model import Model as WakeWordModel
 
 import config
 
@@ -320,7 +336,8 @@ class Pipeline:
 
     # ── PUBLIC API ────────────────────────────────────────
     def start(self, device_index=None):
-        self._pa = pyaudio.PyAudio()
+        with _quiet_stderr():
+            self._pa = pyaudio.PyAudio()
 
         if device_index is None:
             device_index, name = self.find_device(self._pa)
@@ -346,25 +363,21 @@ class Pipeline:
         )
         print("  Wake word model loaded.")
 
-        # ── FIX: ReSpeaker USB firmware outputs 48kHz but we need 16kHz for
-        #    openWakeWord and Whisper. PyAudio will handle the read at RATE=16000
-        #    only if the device supports it. If it fails, we need resampling.
-        #    Try 16kHz first, fall back gracefully.
         try:
-            self._stream = self._pa.open(
-                rate=config.RATE,
-                channels=config.CHANNELS,
-                format=pyaudio.paInt16,
-                input=True,
-                input_device_index=device_index,
-                frames_per_buffer=config.CHUNK
-            )
+            with _quiet_stderr():  # silence ALSA mmap-probe warnings on Pi 5
+                self._stream = self._pa.open(
+                    rate=config.RATE,
+                    channels=config.CHANNELS,
+                    format=pyaudio.paInt16,
+                    input=True,
+                    input_device_index=device_index,
+                    frames_per_buffer=config.CHUNK
+                )
         except OSError as e:
             self._pa.terminate()
             raise RuntimeError(
                 f"Could not open audio stream at {config.RATE}Hz: {e}\n"
-                f"The ReSpeaker USB firmware runs at 48000Hz.\n"
-                f"Try setting RATE=48000 in config.py, or install: pip install soxr"
+                f"Check that the ReSpeaker Lite USB mic is plugged in and not in use by another app."
             )
 
         for target in [

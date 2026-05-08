@@ -27,6 +27,9 @@
 # Each client gets its own pipeline instance.
 # Multiple clients can connect simultaneously and independently.
 
+import os
+os.environ.setdefault('ALSA_CARD', 'Lite')
+
 import asyncio
 import json
 import time
